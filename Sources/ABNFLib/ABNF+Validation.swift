@@ -1,28 +1,6 @@
 import Foundation
 
 extension ABNF {
-    private struct WorkFrame {
-        let element: Element
-        let position: String.Index
-        let continuation: [Element]
-        let continuationIndex: Int
-        let partialTree: ValidationResult?
-        
-        init(element: Element, position: String.Index, continuation: [Element] = [], continuationIndex: Int = 0, partialTree: ValidationResult? = nil) {
-            self.element = element
-            self.position = position
-            self.continuation = continuation
-            self.continuationIndex = continuationIndex
-            self.partialTree = partialTree
-        }
-    }
-
-    private struct ValidationState {
-        var validResults: [ValidationResult] = []
-        var allErrors: [ValidationError] = []
-        var frameStack: [WorkFrame] = []
-    }
-    
     /// Configuration options for ABNF validation operations.
     ///
     /// ValidationOptions allows customization of how input strings are validated against
@@ -183,7 +161,9 @@ extension ABNF {
         }
         
         let coreRules = ABNF.coreRules[options.encoding]![options.allowUnixStyleNewlines]!
-        let rules = coreRules.merging(self.rules.reduce(into: [:]) { $0[$1.name] = $1.element }) { $1 }
+        // Parser has already handled rule merging properly, just convert to dictionary
+        let userRules = self.rules.reduce(into: [:]) { $0[$1.name] = $1.element }
+        let rules = coreRules.merging(userRules) { $1 }
         guard rules[ruleName] != nil else {
             throw ValidationError(index: string.startIndex, message: "Rule '\(ruleName)' not found")
         }
@@ -197,355 +177,365 @@ extension ABNF {
     }
     
     private static func validate(element: Element, input: any StringProtocol, startPosition: String.Index, rules: [String: Element]) throws -> [ValidationResult] {
-        var state = ValidationState()
-        state.frameStack.append(WorkFrame(element: element, position: startPosition))
+        // Memo table for Packrat memoization: (element hash, position offset) -> Result
+        var memo: [String: Result<[ValidationResult], any Error>] = [:]
+        var errors: [any Error] = []
         
-        while !state.frameStack.isEmpty {
-            let frame = state.frameStack.removeLast()
+        func memoKey(element: Element, position: String.Index) -> String {
+            let offset = input.distance(from: input.startIndex, to: position)
+            // Create a more detailed key to avoid conflicts in complex grammars
+            let elementHash = String(String(describing: element).hashValue)
+            return "\(elementHash)_\(offset)"
+        }
+        
+        func validateElement(element: Element, position: String.Index) throws -> [ValidationResult] {
+            let key = memoKey(element: element, position: position)
             
-            do {
-                let results = try process(frame: frame, input: input, rules: rules)
-                
-                if frame.continuation.isEmpty {
-                    state.validResults.append(contentsOf: results)
-                } else {
-                    for result in results {
-                        if frame.continuationIndex < frame.continuation.count {
-                            let nextElement = frame.continuation[frame.continuationIndex]
-                            let updatedContinuation = Array(frame.continuation[(frame.continuationIndex + 1)...])
-                            state.frameStack.append(WorkFrame(
-                                element: nextElement,
-                                position: result.endIndex,
-                                continuation: updatedContinuation,
-                                continuationIndex: 0,
-                                partialTree: result
-                            ))
-                        } else {
-                            state.validResults.append(result)
-                        }
-                    }
+            // Check memo table first
+            if let cached = memo[key] {
+                switch cached {
+                case .success(let results): return results
+                case .failure(let error): throw error
                 }
-            } catch let error as ValidationError {
-                state.allErrors.append(error)
-            } catch let errorCollection as ErrorCollection {
-                state.allErrors.append(contentsOf: errorCollection.errors.compactMap { $0 as? ValidationError })
+            }
+            
+            // Validate element and memoize result
+            let result: Result<[ValidationResult], any Error>
+            do {
+                let results = try validateElementImpl(element: element, position: position)
+                result = .success(results)
+                memo[key] = result
+                return results
+            } catch {
+                result = .failure(error)
+                memo[key] = result
+                throw error
             }
         }
         
-        if state.validResults.isEmpty {
-            if state.allErrors.count > 1 {
-                throw ErrorCollection(errors: state.allErrors)
-            } else if let firstError = state.allErrors.first {
-                throw firstError
-            } else {
-                throw ValidationError(index: startPosition, message: "Validation failed")
-            }
-        }
-        
-        return state.validResults
-    }
-    
-    private static func process(frame: WorkFrame, input: any StringProtocol, rules: [String: Element]) throws -> [ValidationResult] {
-        switch frame.element {
-        case let .ruleName(ruleName):
-            guard let ruleElement = rules[ruleName] else {
-                throw ValidationError(index: frame.position, message: "Undefined rule name: \(ruleName)")
-            }
-            let results = try validate(element: ruleElement, input: input, startPosition: frame.position, rules: rules)
-            // Wrap in rule name trees
-            return results.map { result in
-                let substring = input[frame.position..<result.endIndex]
-                return ValidationResult(
-                    element: frame.element,
-                    startIndex: frame.position,
-                    endIndex: result.endIndex,
-                    children: [result],
-                    matchedText: String(substring)
-                )
+        func validateElementImpl(element: Element, position: String.Index) throws -> [ValidationResult] {
+            guard position <= input.endIndex else {
+                let error = ValidationError(index: position, message: "Unexpected end of input")
+                errors.append(error)
+                throw error
             }
             
-        case let .alternating(elements):
-            var allResults: [ValidationResult] = []
-            var allErrors: [any Error] = []
-            
-            for element in elements {
-                do {
-                    let results = try validate(element: element, input: input, startPosition: frame.position, rules: rules)
-                    for result in results {
-                        let substring = input[frame.position..<result.endIndex]
-                        let altTree = ValidationResult(
-                            element: frame.element,
-                            startIndex: frame.position,
-                            endIndex: result.endIndex,
-                            children: [result],
-                            matchedText: String(substring)
-                        )
-                        allResults.append(altTree)
-                    }
-                } catch {
-                    allErrors.append(error)
-                    continue
+            switch element {
+            case .ruleName(let name):
+                guard let ruleElement = rules[name] else {
+                    let error = ValidationError(index: position, message: "Unknown rule: \(name)")
+                    errors.append(error)
+                    throw error
                 }
-            }
-            
-            if allResults.isEmpty {
-                if allErrors.count > 1 {
-                    throw ErrorCollection(errors: allErrors)
-                } else if let firstError = allErrors.first {
-                    throw firstError
-                } else {
-                    throw ValidationError(index: frame.position, message: "No valid alternation found")
-                }
-            }
-            return allResults
-            
-        case let .concatenating(elements):
-            guard !elements.isEmpty else {
-                let emptyTree = ValidationResult(
-                    element: frame.element,
-                    startIndex: frame.position,
-                    endIndex: frame.position,
-                    children: [],
-                    matchedText: ""
-                )
-                return [emptyTree]
-            }
-            
-            return try process(concatenating: elements, position: frame.position, input: input, rules: rules, parentElement: frame.element)
-            
-        case let .repeating(element, atLeast, upTo):
-            return try process(repeating: element, atLeast: atLeast, upTo: upTo, position: frame.position, input: input, rules: rules, parentElement: frame.element)
-            
-        case let .optional(element):
-            var results: [ValidationResult] = []
-            
-            // Always include the "skip" option
-            let skipTree = ValidationResult(
-                element: frame.element,
-                startIndex: frame.position,
-                endIndex: frame.position,
-                children: [],
-                matchedText: ""
-            )
-            results.append(skipTree)
-            
-            // Try to match the optional element
-            do {
-                let elementResults = try validate(element: element, input: input, startPosition: frame.position, rules: rules)
-                for result in elementResults {
-                    let substring = input[frame.position..<result.endIndex]
-                    let optTree = ValidationResult(
-                        element: frame.element,
-                        startIndex: frame.position,
+                let results = try validateElement(element: ruleElement, position: position)
+                return results.map { result in
+                    ValidationResult(
+                        element: .ruleName(name),
+                        startIndex: result.startIndex,
                         endIndex: result.endIndex,
                         children: [result],
-                        matchedText: String(substring)
+                        matchedText: result.matchedText
                     )
-                    results.append(optTree)
                 }
-            } catch {}
-            
-            return results
-            
-        case let .string(string, caseSensitive):
-            return try process(string: string, caseSensitive: caseSensitive, position: frame.position, input: input, element: frame.element)
-            
-        case let .numeric(number, numericType):
-            return try process(number: number, numericType: numericType, position: frame.position, input: input, element: frame.element)
-            
-        case let .numericSeries(series, _):
-            return try process(series: series, position: frame.position, input: input, element: frame.element)
-            
-        case let .numericRange(min, max, _):
-            return try process(min: min, max: max, position: frame.position, input: input, element: frame.element)
-        }
-    }
-    
-    private static func process(concatenating elements: [Element], position: String.Index, input: any StringProtocol, rules: [String: Element], parentElement: Element) throws -> [ValidationResult] {
-        var allResults: [ValidationResult] = []
-        var allErrors: [any Error] = []
-        
-        func tryConcatenation(elementIndex: Int, currentPos: String.Index, children: [ValidationResult]) {
-            if elementIndex >= elements.count {
-                let substring = input[position..<currentPos]
-                let concatTree = ValidationResult(
-                    element: parentElement,
-                    startIndex: position,
-                    endIndex: currentPos,
-                    children: children,
-                    matchedText: String(substring)
-                )
-                allResults.append(concatTree)
-                return
-            }
-            
-            let element = elements[elementIndex]
-            do {
-                let nextResults = try validate(element: element, input: input, startPosition: currentPos, rules: rules)
-                for result in nextResults {
-                    tryConcatenation(elementIndex: elementIndex + 1, currentPos: result.endIndex, children: children + [result])
+                
+            case .string(let str, let caseSensitive):
+                guard str.count > 0 else {
+                    let error = ValidationError(index: position, message: "Empty string pattern")
+                    errors.append(error)
+                    throw error
                 }
-            } catch {
-                allErrors.append(error)
-            }
-        }
-        
-        tryConcatenation(elementIndex: 0, currentPos: position, children: [])
-        
-        if allResults.isEmpty {
-            if allErrors.count > 1 {
-                throw ErrorCollection(errors: allErrors)
-            } else if let firstError = allErrors.first {
-                throw firstError
-            } else {
-                throw ValidationError(index: position, message: "Concatenation failed")
-            }
-        }
-        
-        return allResults
-    }
-    
-    private static func process(repeating element: Element, atLeast: Int?, upTo: Int?, position: String.Index, input: any StringProtocol, rules: [String: Element], parentElement: Element) throws -> [ValidationResult] {
-        let minCount = atLeast ?? 0
-        let maxCount = upTo
-        
-        var allResults: [ValidationResult] = []
-        var currentLevel: [(String.Index, [ValidationResult])] = [(position, [])]
-        var count = 0
-        
-        // If minimum is 0, the starting position is always valid
-        if minCount == 0 {
-            let emptyTree = ValidationResult(
-                element: parentElement,
-                startIndex: position,
-                endIndex: position,
-                children: [],
-                matchedText: ""
-            )
-            allResults.append(emptyTree)
-        }
-        
-        while count < (maxCount ?? .max) {
-            var nextLevel: [(String.Index, [ValidationResult])] = []
-            
-            for (pos, children) in currentLevel {
-                do {
-                    let elementResults = try validate(element: element, input: input, startPosition: pos, rules: rules)
-                    for result in elementResults {
-                        nextLevel.append((result.endIndex, children + [result]))
-                    }
-                } catch {
-                    continue
+                
+                let endPos = input.index(position, offsetBy: str.count, limitedBy: input.endIndex) ?? input.endIndex
+                guard input.distance(from: position, to: endPos) >= str.count else {
+                    let error = ValidationError(index: position, message: "String '\(str)' extends beyond input")
+                    errors.append(error)
+                    throw error
                 }
-            }
-            
-            if nextLevel.isEmpty {
-                break
-            }
-            
-            count += 1
-            if count >= minCount {
-                for (endPos, children) in nextLevel {
-                    let substring = input[position..<endPos]
-                    let repeatTree = ValidationResult(
-                        element: parentElement,
+                
+                let slice = input[position..<endPos]
+                let substr = String(slice)
+                let matches = caseSensitive ? substr == str : substr.lowercased() == str.lowercased()
+                
+                if matches {
+                    return [ValidationResult(
+                        element: element,
                         startIndex: position,
                         endIndex: endPos,
-                        children: children,
-                        matchedText: String(substring)
-                    )
-                    allResults.append(repeatTree)
+                        matchedText: substr
+                    )]
+                } else {
+                    let error = ValidationError(index: position, message: "Expected '\(str)', found '\(substr)'")
+                    errors.append(error)
+                    throw error
                 }
-            }
-            
-            currentLevel = nextLevel
-        }
-        
-        if count < minCount {
-            throw ValidationError(index: position, message: "Minimum repetition count not met")
-        }
-        
-        return allResults
-    }
-    
-    private static func process(string: String, caseSensitive: Bool, position: String.Index, input: any StringProtocol, element: Element) throws -> [ValidationResult] {
-        if input.distance(from: position, to: input.endIndex) >= string.count {
-            let endPosition = input.index(position, offsetBy: string.count)
-            let substring = input[position..<endPosition]
-            
-            let matches = caseSensitive ?
-                String(substring) == string :
-                substring.lowercased() == string.lowercased()
-            
-            if matches {
-                let tree = ValidationResult(
+                
+            case .numeric(let value, _):
+                guard position < input.endIndex else {
+                    let error = ValidationError(index: position, message: "Expected character with value \(value)")
+                    errors.append(error)
+                    throw error
+                }
+                
+                let char = input[position]
+                let scalar = char.unicodeScalars.first?.value ?? 0
+                
+                if UInt32(scalar) == value {
+                    let endPos = input.index(after: position)
+                    return [ValidationResult(
+                        element: element,
+                        startIndex: position,
+                        endIndex: endPos,
+                        matchedText: String(char)
+                    )]
+                } else {
+                    let error = ValidationError(index: position, message: "Expected character with value \(value), found \(scalar)")
+                    errors.append(error)
+                    throw error
+                }
+                
+            case .numericSeries(let values, _):
+                var currentPos = position
+                var matchedText = ""
+                
+                for value in values {
+                    guard currentPos < input.endIndex else {
+                        let error = ValidationError(index: currentPos, message: "Expected character with value \(value)")
+                        errors.append(error)
+                        throw error
+                    }
+                    
+                    let char = input[currentPos]
+                    let scalar = char.unicodeScalars.first?.value ?? 0
+                    
+                    if UInt32(scalar) == value {
+                        matchedText.append(char)
+                        currentPos = input.index(after: currentPos)
+                    } else {
+                        let error = ValidationError(index: currentPos, message: "Expected character with value \(value), found \(scalar)")
+                        errors.append(error)
+                        throw error
+                    }
+                }
+                
+                return [ValidationResult(
                     element: element,
                     startIndex: position,
-                    endIndex: endPosition,
-                    children: [],
-                    matchedText: String(substring)
-                )
-                return [tree]
+                    endIndex: currentPos,
+                    matchedText: matchedText
+                )]
+                
+            case .numericRange(let min, let max, _):
+                guard position < input.endIndex else {
+                    let error = ValidationError(index: position, message: "Expected character in range \(min)-\(max)")
+                    errors.append(error)
+                    throw error
+                }
+                
+                let char = input[position]
+                let scalar = char.unicodeScalars.first?.value ?? 0
+                
+                
+                if UInt32(scalar) >= min && UInt32(scalar) <= max {
+                    let endPos = input.index(after: position)
+                    return [ValidationResult(
+                        element: element,
+                        startIndex: position,
+                        endIndex: endPos,
+                        matchedText: String(char)
+                    )]
+                } else {
+                    let error = ValidationError(index: position, message: "Expected character in range \(min)-\(max), found \(scalar)")
+                    errors.append(error)
+                    throw error
+                }
+                
+            case .alternating(let alternatives):
+                var alternativeErrors: [any Error] = []
+                var allResults: [ValidationResult] = []
+                
+                for alternative in alternatives {
+                    do {
+                        let results = try validateElement(element: alternative, position: position)
+                        let wrappedResults = results.map { result in
+                            ValidationResult(
+                                element: element,
+                                startIndex: result.startIndex,
+                                endIndex: result.endIndex,
+                                children: [result],
+                                matchedText: result.matchedText
+                            )
+                        }
+                        allResults.append(contentsOf: wrappedResults)
+                    } catch {
+                        alternativeErrors.append(error)
+                    }
+                }
+                
+                if !allResults.isEmpty {
+                    // Sort results by length of matched text (longer matches first)
+                    allResults.sort { first, second in
+                        first.matchedText.count > second.matchedText.count
+                    }
+                    return allResults
+                }
+                
+                let error = ErrorCollection(errors: alternativeErrors)
+                errors.append(error)
+                throw error
+                
+            case .concatenating(let components):
+                func tryValidateConcatenation(componentIndex: Int, currentPos: String.Index, childResults: [ValidationResult], matchedText: String) throws -> [ValidationResult] {
+                    if componentIndex >= components.count {
+                        return [ValidationResult(
+                            element: element,
+                            startIndex: position,
+                            endIndex: currentPos,
+                            children: childResults,
+                            matchedText: matchedText
+                        )]
+                    }
+                    
+                    let component = components[componentIndex]
+                    
+                    // Special handling for optional elements - try both possibilities
+                    if case .optional(let optionalElement) = component {
+                        // Try matching the optional element first
+                        do {
+                            let optionalResults = try validateElement(element: optionalElement, position: currentPos)
+                            if let optionalResult = optionalResults.first {
+                                let wrappedResult = ValidationResult(
+                                    element: component,
+                                    startIndex: optionalResult.startIndex,
+                                    endIndex: optionalResult.endIndex,
+                                    children: [optionalResult],
+                                    matchedText: optionalResult.matchedText
+                                )
+                                do {
+                                    return try tryValidateConcatenation(
+                                        componentIndex: componentIndex + 1,
+                                        currentPos: optionalResult.endIndex,
+                                        childResults: childResults + [wrappedResult],
+                                        matchedText: matchedText + optionalResult.matchedText
+                                    )
+                                } catch {
+                                    // If matching the optional element leads to failure later, try not matching it
+                                }
+                            }
+                        } catch {
+                            // Optional element failed to match, which is okay
+                        }
+                        
+                        // Try not matching the optional element (zero-width match)
+                        let emptyResult = ValidationResult(
+                            element: component,
+                            startIndex: currentPos,
+                            endIndex: currentPos,
+                            matchedText: ""
+                        )
+                        return try tryValidateConcatenation(
+                            componentIndex: componentIndex + 1,
+                            currentPos: currentPos,
+                            childResults: childResults + [emptyResult],
+                            matchedText: matchedText
+                        )
+                    } else {
+                        // Regular component - must match
+                        let componentResults = try validateElement(element: component, position: currentPos)
+                        guard let result = componentResults.first else {
+                            let error = ValidationError(index: currentPos, message: "Component validation failed")
+                            errors.append(error)
+                            throw error
+                        }
+                        
+                        return try tryValidateConcatenation(
+                            componentIndex: componentIndex + 1,
+                            currentPos: result.endIndex,
+                            childResults: childResults + [result],
+                            matchedText: matchedText + result.matchedText
+                        )
+                    }
+                }
+                
+                return try tryValidateConcatenation(componentIndex: 0, currentPos: position, childResults: [], matchedText: "")
+                
+            case .repeating(let repeatedElement, let atLeast, let upTo):
+                let minCount = atLeast ?? 0
+                let maxCount = upTo ?? Int.max
+                
+                var currentPos = position
+                var childResults: [ValidationResult] = []
+                var matchedText = ""
+                var count = 0
+                
+                while count < maxCount && currentPos <= input.endIndex {
+                    do {
+                        let results = try validateElement(element: repeatedElement, position: currentPos)
+                        guard let result = results.first else { break }
+                        
+                        // Prevent infinite loops with zero-width matches
+                        if result.startIndex == result.endIndex && count > 0 {
+                            break
+                        }
+                        
+                        childResults.append(result)
+                        matchedText += result.matchedText
+                        currentPos = result.endIndex
+                        count += 1
+                    } catch {
+                        break
+                    }
+                }
+                
+                if count < minCount {
+                    let error = ValidationError(index: position, message: "Expected at least \(minCount) repetitions, found \(count)")
+                    // Don't add to global errors array - throw directly
+                    throw error
+                }
+                
+                return [ValidationResult(
+                    element: element,
+                    startIndex: position,
+                    endIndex: currentPos,
+                    children: childResults,
+                    matchedText: matchedText
+                )]
+                
+            case .optional(let optionalElement):
+                do {
+                    let results = try validateElement(element: optionalElement, position: position)
+                    return results.map { result in
+                        ValidationResult(
+                            element: element,
+                            startIndex: result.startIndex,
+                            endIndex: result.endIndex,
+                            children: [result],
+                            matchedText: result.matchedText
+                        )
+                    }
+                } catch {
+                    // Optional element can fail - return empty match
+                    return [ValidationResult(
+                        element: element,
+                        startIndex: position,
+                        endIndex: position,
+                        matchedText: ""
+                    )]
+                }
             }
         }
-        throw ValidationError(index: position, message: "Not a valid quoted string")
-    }
-    
-    private static func process(number: UInt32, numericType: Element.NumericType, position: String.Index, input: any StringProtocol, element: Element) throws -> [ValidationResult] {
-        guard position < input.endIndex, let value = input[position].unicodeScalars.first?.value else {
-            throw ValidationError(index: position, message: "End of file")
+        
+        do {
+            return try validateElement(element: element, position: startPosition)
+        } catch {
+            // If it's already a ValidationError and we only have one error, throw it directly
+            if let validationError = error as? ValidationError, errors.count <= 1 {
+                throw validationError
+            }
+            // Otherwise create an ErrorCollection
+            if errors.isEmpty {
+                errors.append(error)
+            }
+            throw ErrorCollection(errors: errors)
         }
-        guard value == number else {
-            throw ValidationError(index: position, message: "\(numericType.prefix)\(numericType.string(value)) != \(numericType.prefix)\(numericType.string(number))")
-        }
-        let endPosition = input.index(after: position)
-        let substring = input[position..<endPosition]
-        let tree = ValidationResult(
-            element: element,
-            startIndex: position,
-            endIndex: endPosition,
-            children: [],
-            matchedText: String(substring)
-        )
-        return [tree]
-    }
-    
-    private static func process(series: [UInt32], position: String.Index, input: any StringProtocol, element: Element) throws -> [ValidationResult] {
-        guard position < input.endIndex else {
-            throw ValidationError(index: position, message: "End of file")
-        }
-        guard input[position...].unicodeScalars.count >= series.count,
-              zip(series, input[position...].unicodeScalars.map({ $0.value })).allSatisfy({ $0.0 == $0.1 }) else {
-            throw ValidationError(index: position, message: "Not a valid numeric value")
-        }
-        let endPosition = input.index(position, offsetBy: series.count)
-        let substring = input[position..<endPosition]
-        let tree = ValidationResult(
-            element: element,
-            startIndex: position,
-            endIndex: endPosition,
-            children: [],
-            matchedText: String(substring)
-        )
-        return [tree]
-    }
-    
-    private static func process(min: UInt32, max: UInt32, position: String.Index, input: any StringProtocol, element: Element) throws -> [ValidationResult] {
-        guard position < input.endIndex else {
-            throw ValidationError(index: position, message: "End of file")
-        }
-        guard let value = input[position].unicodeScalars.first?.value, min <= value, value <= max else {
-            throw ValidationError(index: position, message: "Not a valid numeric value")
-        }
-        let endPosition = input.index(after: position)
-        let substring = input[position..<endPosition]
-        let tree = ValidationResult(
-            element: element,
-            startIndex: position,
-            endIndex: endPosition,
-            children: [],
-            matchedText: String(substring)
-        )
-        return [tree]
     }
 }

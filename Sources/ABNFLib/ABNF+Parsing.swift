@@ -21,6 +21,12 @@ private struct Repeat: Equatable, Sendable {
 }
 
 extension ABNF {
+    /// Internal structure to track rule definition type during parsing
+    private struct ParsedRule {
+        let name: String
+        let element: Element
+        let isIncremental: Bool  // true for =/, false for =
+    }
     /// Configuration options for parsing ABNF grammar strings.
     ///
     /// ParsingOptions controls how ABNF grammar text is parsed into rule structures,
@@ -122,34 +128,40 @@ extension ABNF {
         var ruleOrder = [String]()
         var internalCursor = cursor
         
-        if let rule = try? parseRule(from: input, options: options, cursor: &internalCursor) {
-            ruleDict[rule.name] = rule.element
-            ruleOrder.append(rule.name)
-        } else {
-            while let cursor = try? parseCWSP(from: input, options: options, cursor: internalCursor) {
-                internalCursor = cursor
-            }
-            internalCursor = try parseCNL(from: input, options: options, cursor: internalCursor)
-        }
-        
         while internalCursor < input.endIndex {
             var errors = [any Error]()
             do {
                 let rule = try parseRule(from: input, options: options, cursor: &internalCursor)
                 
-                // Combine rules with same name into alternation
+                // Handle rule definition vs extension - these errors should be thrown immediately
                 if let existing = ruleDict[rule.name] {
-                    if case let .alternating(existingElements) = existing {
-                        ruleDict[rule.name] = .alternating(existingElements + [rule.element])
+                    if rule.isIncremental {
+                        // =/ syntax - merge with existing rule
+                        if case let .alternating(existingElements) = existing {
+                            ruleDict[rule.name] = .alternating(existingElements + [rule.element])
+                        } else {
+                            ruleDict[rule.name] = .alternating([existing, rule.element])
+                        }
                     } else {
-                        ruleDict[rule.name] = .alternating([existing, rule.element])
+                        // = syntax - error because rule already exists
+                        throw ParserError(message: "Rule '\(rule.name)' is already defined. Use '=/' to extend existing rules.")
                     }
                 } else {
-                    ruleDict[rule.name] = rule.element
-                    ruleOrder.append(rule.name)
+                    if rule.isIncremental {
+                        // =/ syntax but no existing rule - error
+                        throw ParserError(message: "Cannot use '=/' for rule '\(rule.name)' - no previous definition exists. Use '=' for initial definition.")
+                    } else {
+                        // = syntax with new rule - ok
+                        ruleDict[rule.name] = rule.element
+                        ruleOrder.append(rule.name)
+                    }
                 }
                 continue
+            } catch let error as ParserError {
+                // ParserError should be thrown immediately (semantic validation errors)
+                throw error
             } catch {
+                // Other errors get collected for alternative parsing attempts
                 errors.append(error)
             }
             do {
@@ -173,37 +185,42 @@ extension ABNF {
         }
     }
     
-    private static func parseRule(from input: any StringProtocol, options: ParsingOptions, cursor: inout String.Index) throws -> Rule {
+    private static func parseRule(from input: any StringProtocol, options: ParsingOptions, cursor: inout String.Index) throws -> ParsedRule {
         var internalCursor = cursor
         let name = try parseRuleName(from: input, options: options, cursor: &internalCursor)
-        _ = try parseDefinedAs(from: input, options: options, cursor: &internalCursor)
+        let isIncremental = try parseDefinedAs(from: input, options: options, cursor: &internalCursor)
         let elements = try parseElements(from: input, options: options, cursor: &internalCursor)
         internalCursor = try parseCNL(from: input, options: options, cursor: internalCursor)
         cursor = internalCursor
-        return Rule(name: name, element: elements)
+        return ParsedRule(name: name, element: elements, isIncremental: isIncremental)
     }
     
     private static let ruleNameRegex = try! NSRegularExpression(pattern: #"^[a-zA-Z][a-zA-Z0-9-]*\b"#, options: [])
     
     private static func parseRuleName(from input: any StringProtocol, options: ParsingOptions, cursor: inout String.Index) throws -> String {
         guard let match = ruleNameRegex.firstMatch(in: String(input), range: NSRange(location: cursor.utf16Offset(in: input), length: input.utf16.count - cursor.utf16Offset(in: input))) else {
-            throw ParserError(message: "Not a valid rule name: \(input)")
+            // Use a different error type for parsing failures vs semantic validation errors
+            struct RuleNameParseError: Error {}
+            throw RuleNameParseError()
         }
         let name = input[Range(match.range, in: input)!]
         cursor = input.index(cursor, offsetBy: name.count)
         return String(name)
     }
     
-    private static func parseDefinedAs(from input: any StringProtocol, options: ParsingOptions, cursor: inout String.Index) throws {
+    private static func parseDefinedAs(from input: any StringProtocol, options: ParsingOptions, cursor: inout String.Index) throws -> Bool {
         var internalCursor = cursor
         while let cursor = try? parseCWSP(from: input, options: options, cursor: internalCursor) {
             internalCursor = cursor
         }
         let slice = input[internalCursor...]
+        let isIncremental: Bool
         if slice.hasPrefix("=/") {
             internalCursor = input.index(internalCursor, offsetBy: 2)
+            isIncremental = true
         } else if slice.hasPrefix("=") {
             internalCursor = input.index(after: internalCursor)
+            isIncremental = false
         } else {
             throw ParserError(message: "Expected '=' or '=/'.")
         }
@@ -211,6 +228,7 @@ extension ABNF {
             internalCursor = cursor
         }
         cursor = internalCursor
+        return isIncremental
     }
     
     private static func parseElements(from input: any StringProtocol, options: ParsingOptions, cursor: inout String.Index) throws -> Element {

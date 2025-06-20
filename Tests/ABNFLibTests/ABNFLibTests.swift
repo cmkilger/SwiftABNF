@@ -4,9 +4,15 @@ import Testing
 
 @Test func parseSlashAssignment() async throws {
     let rules = [
-        Rule(name: "single-space", element: .binary(0b100000))
+        Rule(name: "space-or-tab", element: .alternating([
+            .hexadecimal(0x20),    // First definition with =
+            .hexadecimal(0x09)      // Extended definition with =/
+        ]))
     ]
-    let abnf = try ABNF(string: "single-space =/ %b100000\r\n")
+    let abnf = try ABNF(string: """
+        space-or-tab =  %x20
+        space-or-tab =/ %x09
+        """)
     #expect(abnf.rules == rules)
     try abnf.validate(string: " ")
     #expect(throws: ABNF.ValidationError.self) { try abnf.validate(string: "  ") }
@@ -263,6 +269,14 @@ import Testing
     try abnf.validate(string: "J. Doe IX\n123 Main St.\nSomewhere, US  12345\n", options: options)
 }
 
+@Test func parseErrorOnDuplicateRule() async throws {
+    #expect(throws: ABNF.ParserError.self) { try ABNF(string: "test = ALPHA\r\ntest = DIGIT\r\n") }
+}
+
+@Test func parseErrorOnSlashWithoutDefinition() async throws {
+    #expect(throws: ABNF.ParserError.self) { try ABNF(string: "test =/ ALPHA\r\n") }
+}
+
 @Test func testParseTreeGeneration() async throws {
     let rules = [
         Rule(name: "test", element: .concatenating([
@@ -280,5 +294,3 @@ import Testing
     #expect(result.children.count == 1) // The concatenation child
     #expect(result.children[0].children.count == 3) // hello, space, world
 }
-
-

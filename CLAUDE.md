@@ -16,7 +16,7 @@ SwiftABNF is a Swift library and command-line tool for parsing and validating AB
 
 ### Core Components
 
-- `ABNF` struct: Main parser and validator with frame-based validation engine
+- `ABNF` struct: Main parser and validator
 - `Rule` struct: Represents individual ABNF rules with name and element
 - `Element` enum: Recursive structure representing all ABNF constructs (alternation, concatenation, repetition, strings, numeric values, etc.)
 - `ParseTree` struct: Represents validation results with hierarchical structure
@@ -24,7 +24,6 @@ SwiftABNF is a Swift library and command-line tool for parsing and validating AB
 
 ### Key Features
 
-- Frame-based validation algorithm for efficient parsing
 - Support for case-sensitive and case-insensitive string matching
 - Numeric value parsing in binary (%b), decimal (%d), and hexadecimal (%x) formats
 - Repetition handling with min/max constraints
