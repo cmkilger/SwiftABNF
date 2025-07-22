@@ -421,7 +421,7 @@ extension Element {
 /// let abnf = try ABNF(string: grammar)
 /// try abnf.validate(string: "hello world", ruleName: "greeting")
 /// ```
-public struct ABNF {
+public struct ABNF: Sendable {
     /// The rules that make up this ABNF grammar.
     ///
     /// Rules are stored in the order they were defined in the original grammar.
