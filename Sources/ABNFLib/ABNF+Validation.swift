@@ -157,7 +157,7 @@ extension ABNF {
     /// - Note: The input must completely match the rule. Partial matches will result in a validation error.
     @discardableResult public func validate(string: String, ruleName: String? = nil, options: ABNF.ValidationOptions = .defaultOptions) throws -> ValidationResult {
         guard let ruleName = ruleName ?? rules.first?.name else {
-            throw ValidationError(index: string.startIndex, message: "No rule specified for validation")
+            throw ValidationError(index: 0, message: "No rule specified for validation")
         }
         
         let coreRules = ABNF.coreRules[options.encoding]![options.allowUnixStyleNewlines]!
@@ -165,31 +165,30 @@ extension ABNF {
         let userRules = self.rules.reduce(into: [:]) { $0[$1.name] = $1.element }
         let rules = coreRules.merging(userRules) { $1 }
         guard rules[ruleName] != nil else {
-            throw ValidationError(index: string.startIndex, message: "Rule '\(ruleName)' not found")
+            throw ValidationError(index: 0, message: "Rule '\(ruleName)' not found")
         }
         
-        let results = try ABNF.validate(element: .ruleName(ruleName), input: string, startPosition: string.startIndex, rules: rules)
-        guard let fullMatch = results.first(where: { $0.endIndex == string.endIndex }) else {
-            throw ValidationError(index: string.startIndex, message: "Input does not fully match rule '\(ruleName)'")
+        let input = Array(string.unicodeScalars)
+        let results = try ABNF.validate(element: .ruleName(ruleName), input: input, startPosition: 0, rules: rules)
+        guard let fullMatch = results.first(where: { $0.endIndex == input.count }) else {
+            throw ValidationError(index: 0, message: "Input does not fully match rule '\(ruleName)'")
         }
         
         return fullMatch
     }
     
-    private static func validate(element: Element, input: any StringProtocol, startPosition: String.Index, rules: [String: Element]) throws -> [ValidationResult] {
-        // Memo table for Packrat memoization: (element hash, position offset) -> Result
-        var memo: [String: Result<[ValidationResult], any Error>] = [:]
-        var errors: [any Error] = []
-        
-        func memoKey(element: Element, position: String.Index) -> String {
-            let offset = input.distance(from: input.startIndex, to: position)
-            // Create a more detailed key to avoid conflicts in complex grammars
-            let elementHash = String(String(describing: element).hashValue)
-            return "\(elementHash)_\(offset)"
+    private static func validate(element: Element, input: [Unicode.Scalar], startPosition: Int, rules: [String: Element]) throws -> [ValidationResult] {
+        struct MemoKey: Hashable {
+            let element: Element
+            let position: Int
         }
         
-        func validateElement(element: Element, position: String.Index) throws -> [ValidationResult] {
-            let key = memoKey(element: element, position: position)
+        // Memo table for Packrat memoization: (element hash, position offset) -> Result
+        var memo: [MemoKey: Result<[ValidationResult], any Error>] = [:]
+        var errors: [any Error] = []
+        
+        func validateElement(element: Element, position: Int) throws -> [ValidationResult] {
+            let key = MemoKey(element: element, position: position)
             
             // Check memo table first
             if let cached = memo[key] {
@@ -213,7 +212,7 @@ extension ABNF {
             }
         }
         
-        func validateElementImpl(element: Element, position: String.Index) throws -> [ValidationResult] {
+        func validateElementImpl(element: Element, position: Int) throws -> [ValidationResult] {
             guard position <= input.endIndex else {
                 let error = ValidationError(index: position, message: "Unexpected end of input")
                 errors.append(error)
@@ -253,7 +252,7 @@ extension ABNF {
                 }
                 
                 let slice = input[position..<endPos]
-                let substr = String(slice)
+                let substr = slice.map { String($0) }.joined()
                 let matches = caseSensitive ? substr == str : substr.lowercased() == str.lowercased()
                 
                 if matches {
@@ -277,7 +276,7 @@ extension ABNF {
                 }
                 
                 let char = input[position]
-                let scalar = char.unicodeScalars.first?.value ?? 0
+                let scalar = char.value
                 
                 if UInt32(scalar) == value {
                     let endPos = input.index(after: position)
@@ -305,10 +304,10 @@ extension ABNF {
                     }
                     
                     let char = input[currentPos]
-                    let scalar = char.unicodeScalars.first?.value ?? 0
+                    let scalar = char.value
                     
                     if UInt32(scalar) == value {
-                        matchedText.append(char)
+                        matchedText.append(String(char))
                         currentPos = input.index(after: currentPos)
                     } else {
                         let error = ValidationError(index: currentPos, message: "Expected character with value \(value), found \(scalar)")
@@ -332,7 +331,7 @@ extension ABNF {
                 }
                 
                 let char = input[position]
-                let scalar = char.unicodeScalars.first?.value ?? 0
+                let scalar = char.value
                 
                 
                 if UInt32(scalar) >= min && UInt32(scalar) <= max {
@@ -384,7 +383,7 @@ extension ABNF {
                 throw error
                 
             case .concatenating(let components):
-                func tryValidateConcatenation(componentIndex: Int, currentPos: String.Index, childResults: [ValidationResult], matchedText: String) throws -> [ValidationResult] {
+                func tryValidateConcatenation(componentIndex: Int, currentPos: Int, childResults: [ValidationResult], matchedText: String) throws -> [ValidationResult] {
                     if componentIndex >= components.count {
                         return [ValidationResult(
                             element: element,

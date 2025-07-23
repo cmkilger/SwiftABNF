@@ -59,14 +59,14 @@ public struct Rule: Equatable, Sendable {
 ///     .ruleName("name")
 /// ])
 /// ```
-public indirect enum Element: Equatable, Sendable {
+public indirect enum Element: Equatable, Hashable, Sendable {
     /// Specifies the numeric base for ABNF numeric values.
     ///
     /// ABNF supports three numeric representations corresponding to different bases:
     /// - Binary (%b): Base 2 representation
     /// - Decimal (%d): Base 10 representation  
     /// - Hexadecimal (%x): Base 16 representation
-    public enum NumericType: Equatable, Sendable {
+    public enum NumericType: Equatable, Hashable, Sendable {
         /// Binary (base 2) numeric values, prefixed with %b in ABNF notation.
         case binary
         /// Decimal (base 10) numeric values, prefixed with %d in ABNF notation.

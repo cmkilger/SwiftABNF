@@ -35,7 +35,7 @@ extension ABNF {
         /// The position in the input string where validation failed.
         ///
         /// This index points to the specific character or position that caused the validation to fail.
-        public let index: String.Index
+        public let index: Int
         
         /// A descriptive message explaining why validation failed.
         ///
@@ -72,13 +72,13 @@ extension ABNF {
         public let element: Element
         
         /// The starting position in the input string for this match.
-        public let startIndex: String.Index
+        public let startIndex: Int
         
         /// The ending position in the input string for this match.
         ///
         /// For a complete validation, this should be the end of the input string.
         /// For partial matches, this indicates how much of the input was consumed.
-        public let endIndex: String.Index
+        public let endIndex: Int
         
         /// Child validation results representing sub-matches.
         ///
@@ -99,7 +99,7 @@ extension ABNF {
         ///   - endIndex: Ending position of the match.
         ///   - children: Child validation results (empty by default).
         ///   - matchedText: The text that was matched.
-        public init(element: Element, startIndex: String.Index, endIndex: String.Index, children: [ValidationResult] = [], matchedText: String) {
+        public init(element: Element, startIndex: Int, endIndex: Int, children: [ValidationResult] = [], matchedText: String) {
             self.element = element
             self.startIndex = startIndex
             self.endIndex = endIndex
