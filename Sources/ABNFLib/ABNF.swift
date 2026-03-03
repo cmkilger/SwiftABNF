@@ -169,6 +169,14 @@ public indirect enum Element: Equatable, Hashable, Sendable {
     ///   - max: Maximum acceptable value (inclusive).
     ///   - type: The numeric base for the range.
     case numericRange(min: UInt32, max: UInt32, type: NumericType)
+    
+    /// A prosaic description of an element. Used as a last resort in grammars
+    /// where something can not be specified in ABNF.
+    ///
+    /// Corresponds to ABNF prose-val notation like `< *(not >) >`.
+    /// - Parameters:
+    ///   - String: The contents of the angle brackets.
+    case proseVal(String)
 }
 
 extension Element {
