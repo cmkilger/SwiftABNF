@@ -182,6 +182,19 @@ import Testing
     #expect(throws: ABNF.ValidationError.self) { try abnf.validate(string: "    ") }
 }
 
+@Test func parseSyntaxErrorRule() async throws {
+    do {
+        let _ = try ABNF(string: "; comment\r\n" + "badly-defined = [%x20] ) \"bad\"\r\n")
+        Issue.record("Expected ABNF.ParserError to be thrown")
+    } catch let error as ABNF.ParserError {
+        #expect(error.line == 2)
+        #expect(error.column == 24)
+    } catch {
+        Issue.record("Expected ABNF.ParserError, got \(type(of: error))")
+    }
+}
+
+
 @Test func parseOptionalRule() async throws {
     let rules = [
         Rule(name: "optional-space", element: .optional(.hexadecimal(0x20)))

@@ -51,6 +51,16 @@ extension ABNF {
         ///
         /// The message describes what grammar construct was malformed or missing.
         public let message: String
+        
+        /// The line number in the input string where the parse failed.
+        ///
+        /// This number points to the specific line number where the parse failed.
+        public let line: Int
+        
+        /// The column number in the failing line where the parse failed.
+        ///
+        /// This number points to the specific character  on the line where the parse failed.
+        public let column: Int
     }
     
     /// The result of a successful validation operation.

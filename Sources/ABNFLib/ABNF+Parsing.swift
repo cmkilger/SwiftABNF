@@ -144,12 +144,14 @@ extension ABNF {
                         }
                     } else {
                         // = syntax - error because rule already exists
-                        throw ParserError(message: "Rule '\(rule.name)' is already defined. Use '=/' to extend existing rules.")
+                        let (line, column) = location(in: input, at: internalCursor)
+                        throw ParserError(message: "Rule '\(rule.name)' is already defined. Use '=/' to extend existing rules.", line: line, column: column)
                     }
                 } else {
                     if rule.isIncremental {
                         // =/ syntax but no existing rule - error
-                        throw ParserError(message: "Cannot use '=/' for rule '\(rule.name)' - no previous definition exists. Use '=' for initial definition.")
+                        let (line, column) = location(in: input, at: internalCursor)
+                        throw ParserError(message: "Cannot use '=/' for rule '\(rule.name)' - no previous definition exists. Use '=' for initial definition.", line: line, column: column)
                     } else {
                         // = syntax with new rule - ok
                         ruleDict[rule.name] = rule.element
@@ -173,7 +175,8 @@ extension ABNF {
                 errors.append(error)
             }
             if errors.count == 2 {
-                throw ParserError(message: "Failed to parse rule or comment and whitespace")
+                let (line, column) = location(in: input, at: internalCursor)
+                throw ParserError(message: "Failed to parse rule or comment and whitespace", line: line, column: column)
             }
         }
         
@@ -222,7 +225,8 @@ extension ABNF {
             internalCursor = input.index(after: internalCursor)
             isIncremental = false
         } else {
-            throw ParserError(message: "Expected '=' or '=/'.")
+            let (line, column) = location(in: input, at: internalCursor)
+            throw ParserError(message: "Expected '=' or '=/'.", line: line, column: column)
         }
         while let cursor = try? parseCWSP(from: input, options: options, cursor: internalCursor) {
             internalCursor = cursor
@@ -250,7 +254,8 @@ extension ABNF {
                     internalCursor = cursor
                 }
                 guard input[internalCursor...].hasPrefix("/") else {
-                    throw ParserError(message: "Expected '/' after concatenation.")
+                    let (line, column) = location(in: input, at: internalCursor)
+                    throw ParserError(message: "Expected '/' after concatenation.", line: line, column: column)
                 }
                 internalCursor = input.index(after: internalCursor)
                 while let cursor = try? parseCWSP(from: input, options: options, cursor: internalCursor) {
@@ -280,13 +285,15 @@ extension ABNF {
         } else if let proseVal = try? parseProseVal(from: input, options: options, cursor: &cursor) {
             return proseVal
         }
-        throw ParserError(message: "Not a valid ABNF element")
+        let (line, column) = location(in: input, at: cursor)
+        throw ParserError(message: "Not a valid ABNF element", line: line, column: column)
     }
     
     private static func parseGroup(from input: any StringProtocol, options: ParsingOptions, cursor: inout String.Index) throws -> Element {
         var internalCursor = cursor
         guard input[internalCursor...].hasPrefix("(") else {
-            throw ParserError(message: "Not a valid group")
+            let (line, column) = location(in: input, at: internalCursor)
+            throw ParserError(message: "Not a valid group", line: line, column: column)
         }
         internalCursor = input.index(after: internalCursor)
         while let cursor = try? parseCWSP(from: input, options: options, cursor: internalCursor) {
@@ -297,7 +304,8 @@ extension ABNF {
             internalCursor = cursor
         }
         guard input[internalCursor...].hasPrefix(")") else {
-            throw ParserError(message: "Not a valid group")
+            let (line, column) = location(in: input, at: internalCursor)
+            throw ParserError(message: "Not a valid group", line: line, column: column)
         }
         cursor = input.index(after: internalCursor)
         return alternation
@@ -306,7 +314,8 @@ extension ABNF {
     private static func parseOption(from input: any StringProtocol, options: ParsingOptions, cursor: inout String.Index) throws -> Element {
         var internalCursor = cursor
         guard input[internalCursor...].hasPrefix("[") else {
-            throw ParserError(message: "Not a valid option")
+            let (line, column) = location(in: input, at: internalCursor)
+            throw ParserError(message: "Not a valid option", line: line, column: column)
         }
         internalCursor = input.index(after: internalCursor)
         while let cursor = try? parseCWSP(from: input, options: options, cursor: internalCursor) {
@@ -317,7 +326,8 @@ extension ABNF {
             internalCursor = cursor
         }
         guard input[internalCursor...].hasPrefix("]") else {
-            throw ParserError(message: "Not a valid option")
+            let (line, column) = location(in: input, at: internalCursor)
+            throw ParserError(message: "Not a valid option", line: line, column: column)
         }
         cursor = input.index(after: internalCursor)
         return .optional(alternation)
@@ -356,7 +366,8 @@ extension ABNF {
     
     private static func parseRepeat(from input: any StringProtocol, options: ParsingOptions, cursor: inout String.Index) throws -> Repeat {
         guard let match = repeatRegex.firstMatch(in: String(input), range: NSRange(location: cursor.utf16Offset(in: input), length: input.utf16.count - cursor.utf16Offset(in: input))) else {
-            throw ParserError(message: "Not a valid repeat")
+            let (line, column) = location(in: input, at: cursor)
+            throw ParserError(message: "Not a valid repeat", line: line, column: column)
         }
         let string = input[Range(match.range, in: input)!]
         cursor = input.index(cursor, offsetBy: string.count)
@@ -386,7 +397,8 @@ extension ABNF {
             internalCursor = input.index(internalCursor, offsetBy: 2)
         }
         guard let match = charValRegexes[options.encoding]!.firstMatch(in: String(input), range: NSRange(location: internalCursor.utf16Offset(in: input), length: input.utf16.count - internalCursor.utf16Offset(in: input))) else {
-            throw ParserError(message: "Not a valid quoted string")
+            let (line, column) = location(in: input, at: internalCursor)
+            throw ParserError(message: "Not a valid quoted string", line: line, column: column)
         }
         let string = input[Range(match.range(at: 1), in: input)!]
         cursor = input.index(internalCursor, offsetBy: string.count + 2)
@@ -396,7 +408,8 @@ extension ABNF {
     private static func parseNumVal(from input: any StringProtocol, options: ParsingOptions, cursor: inout String.Index) throws -> Element {
         var internalCursor = cursor
         guard input[internalCursor...].hasPrefix("%") else {
-            throw ParserError(message: "Not a valid numeric value")
+            let (line, column) = location(in: input, at: internalCursor)
+            throw ParserError(message: "Not a valid numeric value", line: line, column: column)
         }
         internalCursor = input.index(after: internalCursor)
         if let binVal = binParse(from: input, options: options, cursor: &internalCursor) {
@@ -409,7 +422,8 @@ extension ABNF {
             cursor = internalCursor
             return hexVal
         }
-        throw ParserError(message: "Not a valid numeric value")
+        let (line, column) = location(in: input, at: internalCursor)
+        throw ParserError(message: "Not a valid numeric value", line: line, column: column)
     }
     
     private static func numValue(string: any StringProtocol, numericType: Element.NumericType) -> Element {
@@ -462,7 +476,8 @@ extension ABNF {
         } else if let cursor = try? parseCRLF(from: input, options: options, cursor: cursor) {
             return cursor
         }
-        throw ParserError(message: "Not a valid CNL")
+        let (line, column) = location(in: input, at: cursor)
+        throw ParserError(message: "Not a valid CNL", line: line, column: column)
     }
     
     private static func parseCWSP(from input: any StringProtocol, options: ParsingOptions, cursor: String.Index) throws -> String.Index {
@@ -471,13 +486,15 @@ extension ABNF {
         } else if let cursor = try? parseCNL(from: input, options: options, cursor: cursor), let cursor = try? parseWSP(from: input, options: options, cursor: cursor) {
             return cursor
         }
-        throw ParserError(message: "Not a valid CWSP")
+        let (line, column) = location(in: input, at: cursor)
+        throw ParserError(message: "Not a valid CWSP", line: line, column: column)
     }
     
     private static func parseComment(from input: any StringProtocol, options: ParsingOptions, cursor: String.Index) throws -> String.Index {
         var internalCursor = cursor
         guard input[internalCursor...].hasPrefix(";") else {
-            throw ParserError(message: "Not a valid comment")
+            let (line, column) = location(in: input, at: internalCursor)
+            throw ParserError(message: "Not a valid comment", line: line, column: column)
         }
         internalCursor = input.index(internalCursor, offsetBy: 1)
         while true {
@@ -495,7 +512,8 @@ extension ABNF {
     private static func parseProseVal(from input: any StringProtocol, options: ParsingOptions, cursor: inout String.Index) throws -> Element {
         guard input[cursor...].hasPrefix("<"),
               let closing = input[cursor...].firstIndex(of: ">") else {
-            throw ParserError(message: "Not a valid prose value")
+            let (line, column) = location(in: input, at: cursor)
+            throw ParserError(message: "Not a valid prose value", line: line, column: column)
         }
         
         let content = input[ input.index(after: cursor)..<closing]
@@ -520,11 +538,13 @@ extension ABNF {
     private static func parseVChar(from input: any StringProtocol, options: ParsingOptions, cursor: String.Index) throws -> String.Index {
         let unicodeScalars = String(input).unicodeScalars
         guard cursor < unicodeScalars.endIndex else {
-            throw ParserError(message: "End of file")
+            let (line, column) = location(in: input, at: cursor)
+            throw ParserError(message: "End of file", line: line, column: column)
         }
         let character = unicodeScalars[cursor]
         guard visibleCharacterSets[options.encoding]!.contains(character) else {
-            throw ParserError(message: "Not a valid VCHAR")
+            let (line, column) = location(in: input, at: cursor)
+            throw ParserError(message: "Not a valid VCHAR", line: line, column: column)
         }
         return unicodeScalars.index(after: cursor)
     }
@@ -535,12 +555,14 @@ extension ABNF {
         } else if input[cursor...].hasPrefix("\t") {
             return input.index(after: cursor)
         }
-        throw ParserError(message: "Not a valid WSP")
+        let (line, column) = location(in: input, at: cursor)
+        throw ParserError(message: "Not a valid WSP", line: line, column: column)
     }
     
     private static func parseCRLF(from input: any StringProtocol, options: ParsingOptions, cursor: String.Index) throws -> String.Index {
         guard input[cursor...].hasPrefix("\r\n") || options.allowUnixStyleNewlines && input[cursor...].hasPrefix("\n") || options.allowOmittingFinalNewline && input[cursor...].isEmpty else {
-            throw ParserError(message: "Not a valid CRLF")
+            let (line, column) = location(in: input, at: cursor)
+            throw ParserError(message: "Not a valid CRLF", line: line, column: column)
         }
         var internalCursor = cursor
         if !input[cursor...].isEmpty {
@@ -548,4 +570,21 @@ extension ABNF {
         }
         return internalCursor
     }
+    
+    private static func location(in string: any StringProtocol, at index: String.Index) -> (Int,Int) {
+        var line = 1
+        var column = 1
+        
+        for ch in string[string.startIndex..<index] {
+            if ch.isNewline {  // important: this catches when String makes CR LF be a single grapheme cluster.
+                line += 1
+                column = 1
+            } else {
+                column += 1
+            }
+        }
+        
+        return (line,column)
+    }
+
 }
