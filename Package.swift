@@ -32,7 +32,7 @@ let package = Package(
             name: "abnf",
             dependencies: [
                 "ABNFLib",
-                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+                .product(name: "ArgumentParser", package: "swift-argument-parser", condition: .when(platforms: [.macOS, .linux, .windows])),
             ]),
         .testTarget(
             name: "ABNFLibTests",

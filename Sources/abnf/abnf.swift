@@ -1,6 +1,8 @@
 // main.swift
 // Entry point for the ABNF command-line tool
 
+#if canImport(ArgumentParser)
+
 import ArgumentParser
 import ABNFLib
 
@@ -34,3 +36,14 @@ struct ABNFCommand: ParsableCommand {
         }
     }
 }
+
+#else
+
+@main
+struct ABNFCommand {
+    static func main() {
+        print("This tool requires the ArgumentParser package, which is only available on supported platforms (macOS, Linux, Windows).")
+    }
+}
+
+#endif
