@@ -197,13 +197,27 @@ extension ABNF {
     
     private static let ruleNameRegex = try! NSRegularExpression(pattern: #"^[a-zA-Z][a-zA-Z0-9-]*\b"#, options: [])
     
+    private static func firstMatch(_ regex: NSRegularExpression, in input: any StringProtocol, from cursor: String.Index) -> (string: String, match: NSTextCheckingResult)? {
+        let inputString = String(input)
+        let location = cursor.utf16Offset(in: input)
+        let searchRange = NSRange(location: location, length: inputString.utf16.count - location)
+        guard let match = regex.firstMatch(in: inputString, range: searchRange) else {
+            return nil
+        }
+        return (inputString, match)
+    }
+    
+    private static func substring(in input: String, for range: NSRange) -> Substring {
+        input[Range(range, in: input)!]
+    }
+    
     private static func parseRuleName(from input: any StringProtocol, options: ParsingOptions, cursor: inout String.Index) throws -> String {
-        guard let match = ruleNameRegex.firstMatch(in: String(input), range: NSRange(location: cursor.utf16Offset(in: input), length: input.utf16.count - cursor.utf16Offset(in: input))) else {
+        guard let result = firstMatch(ruleNameRegex, in: input, from: cursor) else {
             // Use a different error type for parsing failures vs semantic validation errors
             struct RuleNameParseError: Error {}
             throw RuleNameParseError()
         }
-        let name = input[Range(match.range, in: input)!]
+        let name = substring(in: result.string, for: result.match.range)
         cursor = input.index(cursor, offsetBy: name.count)
         return String(name)
     }
@@ -353,10 +367,10 @@ extension ABNF {
     private static let repeatRegex = try! NSRegularExpression(pattern: #"^(?:[0-9]*\*[0-9]*|[0-9]+)"#)
     
     private static func parseRepeat(from input: any StringProtocol, options: ParsingOptions, cursor: inout String.Index) throws -> Repeat {
-        guard let match = repeatRegex.firstMatch(in: String(input), range: NSRange(location: cursor.utf16Offset(in: input), length: input.utf16.count - cursor.utf16Offset(in: input))) else {
+        guard let result = firstMatch(repeatRegex, in: input, from: cursor) else {
             throw ParserError(message: "Not a valid repeat")
         }
-        let string = input[Range(match.range, in: input)!]
+        let string = substring(in: result.string, for: result.match.range)
         cursor = input.index(cursor, offsetBy: string.count)
         return Repeat(string: String(string))
     }
@@ -383,10 +397,10 @@ extension ABNF {
         } else if input[internalCursor...].hasPrefix("%i") {
             internalCursor = input.index(internalCursor, offsetBy: 2)
         }
-        guard let match = charValRegexes[options.encoding]!.firstMatch(in: String(input), range: NSRange(location: internalCursor.utf16Offset(in: input), length: input.utf16.count - internalCursor.utf16Offset(in: input))) else {
+        guard let result = firstMatch(charValRegexes[options.encoding]!, in: input, from: internalCursor) else {
             throw ParserError(message: "Not a valid quoted string")
         }
-        let string = input[Range(match.range(at: 1), in: input)!]
+        let string = substring(in: result.string, for: result.match.range(at: 1))
         cursor = input.index(internalCursor, offsetBy: string.count + 2)
         return .string(String(string), caseSensitive: caseSensitive)
     }
@@ -424,33 +438,33 @@ extension ABNF {
     private static let binRegex = try! NSRegularExpression(pattern: #"^b([01]+(?:(?:\.[01]+)+|-[01]+)?)"#, options: [])
     
     private static func binParse(from input: any StringProtocol, options: ParsingOptions, cursor: inout String.Index) -> Element? {
-        guard let match = binRegex.firstMatch(in: String(input), range: NSRange(location: cursor.utf16Offset(in: input), length: input.utf16.count - cursor.utf16Offset(in: input))) else {
+        guard let result = firstMatch(binRegex, in: input, from: cursor) else {
             return nil
         }
-        let string = input[Range(match.range(at: 1), in: input)!]
-        cursor = input.index(cursor, offsetBy: match.range.length)
+        let string = substring(in: result.string, for: result.match.range(at: 1))
+        cursor = input.index(cursor, offsetBy: result.match.range.length)
         return numValue(string: string, numericType: .binary)
     }
     
     private static let decRegex = try! NSRegularExpression(pattern: #"^d([0-9]+(?:(?:\.[0-9]+)+|-[0-9]+)?)"#, options: [])
     
     private static func decParse(from input: any StringProtocol, options: ParsingOptions, cursor: inout String.Index) -> Element? {
-        guard let match = decRegex.firstMatch(in: String(input), range: NSRange(location: cursor.utf16Offset(in: input), length: input.utf16.count - cursor.utf16Offset(in: input))) else {
+        guard let result = firstMatch(decRegex, in: input, from: cursor) else {
             return nil
         }
-        let string = input[Range(match.range(at: 1), in: input)!]
-        cursor = input.index(cursor, offsetBy: match.range.length)
+        let string = substring(in: result.string, for: result.match.range(at: 1))
+        cursor = input.index(cursor, offsetBy: result.match.range.length)
         return numValue(string: string, numericType: .decimal)
     }
     
     private static let hexRegex = try! NSRegularExpression(pattern: #"^x([0-9A-F]+(?:(?:\.[0-9A-F]+)+|-[0-9A-F]+)?)"#, options: [])
     
     private static func hexParse(from input: any StringProtocol, options: ParsingOptions, cursor: inout String.Index) -> Element? {
-        guard let match = hexRegex.firstMatch(in: String(input), range: NSRange(location: cursor.utf16Offset(in: input), length: input.utf16.count - cursor.utf16Offset(in: input))) else {
+        guard let result = firstMatch(hexRegex, in: input, from: cursor) else {
             return nil
         }
-        let string = input[Range(match.range(at: 1), in: input)!]
-        cursor = input.index(cursor, offsetBy: match.range.length)
+        let string = substring(in: result.string, for: result.match.range(at: 1))
+        cursor = input.index(cursor, offsetBy: result.match.range.length)
         return numValue(string: string, numericType: .hexadecimal)
     }
     
