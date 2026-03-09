@@ -291,6 +291,8 @@ extension ABNF {
             return charVal
         } else if let numVal = try? parseNumVal(from: input, options: options, cursor: &cursor) {
             return numVal
+        } else if let proseVal = try? parseProseVal(from: input, options: options, cursor: &cursor) {
+            return proseVal
         }
         throw ParserError(message: "Not a valid ABNF element")
     }
@@ -503,7 +505,19 @@ extension ABNF {
         }
         return try parseCRLF(from: input, options: options, cursor: internalCursor)
     }
+
+    private static func parseProseVal(from input: any StringProtocol, options: ParsingOptions, cursor: inout String.Index) throws -> Element {
+        guard input[cursor...].hasPrefix("<"),
+              let closing = input[cursor...].firstIndex(of: ">") else {
+            throw ParserError(message: "Not a valid prose value")
+        }
+        
+        let content = input[ input.index(after: cursor)..<closing]
+        cursor = input.index(after: closing)
+        return .proseVal(String(content))
+    }
     
+
     private static let visibleCharacterSets: [Encoding: CharacterSet] = Encoding.allCases.reduce(into: [:]) { dict, encoding in
         dict[encoding] = {
             switch encoding {

@@ -520,6 +520,10 @@ extension ABNF {
                         matchedText: ""
                     )]
                 }
+            case .proseVal(_):
+                let error = ValidationError(index: position, message: "Prose-val cannot be validated")
+                errors.append(error)
+                throw error
             }
         }
         
